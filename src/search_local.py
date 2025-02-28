@@ -19,7 +19,6 @@ flags.DEFINE_string('cache', 'cache.db', '')
 flags.DEFINE_integer('hash_size', 1024, '')
 flags.DEFINE_integer('threads', 1, '')
 flags.DEFINE_integer('depth', 1, '')
-flags.DEFINE_integer('flush_freq', 10, '')
 flags.DEFINE_integer('np', 1, 'num processes')
 
 def simplify_pv(pv):
@@ -145,14 +144,14 @@ def main(argv):
   longest = 0.0
   last = time.time()
   flushes = 0
-  for writes in (pbar := tqdm.tqdm(range(queued))):
+  for _ in (pbar := tqdm.tqdm(range(queued))):
     pbar.set_postfix({'longest': longest, 'flushes': flushes})
     res = response_queue.get()
     cache[fen] = res
 
     if res[-1]['time'] > longest:
       longest = res[-1]['time']
-    if writes > 0 and (writes % FLAGS.flush_freq == 0 or time.time() > (last + 60.0)):
+    if time.time() > (last + 60.0):
       last = time.time()
       cache.commit()
       flushes += 1
@@ -166,27 +165,6 @@ def main(argv):
     p.join()
   print('Joined')
 
-
-  #pbar = tqdm.tqdm(foo)
-  # for fen in pbar:
-  #   pbar.set_postfix({'wins': wins, 'writes': writes, 'longest': longest})
-  #   multi = cache.get(fen, None)
-  #   if multi and multi[-1]['depth'] >= FLAGS.depth:
-  #     wins += 1
-  #     continue
-  #   res = search_deeply(engine, fen, FLAGS.depth)
-  #   cache[fen] = res
-  #   if res[-1]['time'] > longest:
-  #     longest = res[-1]['time']
-  #   writes += 1
-  #   if writes % FLAGS.flush_freq == 0:
-  #     cache.commit()
-  # cache.commit()
-  # engine.quit()
-  # print()
-  # print('Wins: ', wins)
-  # print('Writes: ', writes)
-  #print(f'{depth:2d}. {res["ev"]:8d} {res["wdl"]:5.3f} {res["best"]:10s} {res["time"]:4.1f}s {res["nodes"]:8d} {" ".join(res["pv"])}')
 
 
 if __name__ == "__main__":
