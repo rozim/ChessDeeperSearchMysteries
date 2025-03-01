@@ -80,13 +80,17 @@ def search_deeply(engine, fen: str, max_depth: int) -> list:
   return [search_at_depth(engine, board, depth) for depth in range(max_depth + 1)]
 
 
-def analysis_worker(request_queue, response_queue, engine, hash_size, max_depth) -> None:
-
-  engine = chess.engine.SimpleEngine.popen_uci(engine)
+def start_engine(engine_exe, hash_size):
+  engine = chess.engine.SimpleEngine.popen_uci(engine_exe)
 
   engine.configure({'Hash': hash_size})
   engine.configure({'Threads': 1})
   engine.configure({'UCI_ShowWDL': 'true'})
+  return engine
+
+
+def analysis_worker(request_queue, response_queue, engine_exe, hash_size, max_depth) -> None:
+  engine = start_engine(engine_exe, hash_size)
 
   while True:
     task = request_queue.get()
@@ -96,8 +100,26 @@ def analysis_worker(request_queue, response_queue, engine, hash_size, max_depth)
       engine.quit()
       break
     fen = task
-    response_queue.put(search_deeply(engine, fen, max_depth))
+    response_queue.put({'fen': fen,
+                        'deep_res': search_deeply(engine, fen, max_depth)})
 
+
+def queue_fens(fens, request_queue, cache):
+  foo = list(fens)
+  random.shuffle(foo)
+
+  wins = 0
+  queued = 0
+  print('Queueing')
+  for fen in foo:
+    multi = cache.get(fen, None)
+    if multi and multi[-1]['depth'] >= FLAGS.depth:
+      wins += 1
+      continue
+    queued += 1
+    request_queue.put(fen)
+  print(f'Queued, wins={wins}, queued={queued}')
+  return queued
 
 
 def main(argv):
@@ -115,46 +137,30 @@ def main(argv):
                           encode=json.dumps,
                           decode=json.loads)
 
-  # engine = chess.engine.SimpleEngine.popen_uci(FLAGS.engine)
-  # engine.configure({'Hash': FLAGS.hash_size})
-  # engine.configure({'Threads': FLAGS.threads})
-  # engine.configure({'UCI_ShowWDL': 'true'})
-
   fens = set() # Unique across all games.
   for g in gen_games(FLAGS.pgn):
     fens.update(gen_simplified_fens(g))
   print('FENS: ', len(fens))
 
-  foo = list(fens)
-  random.shuffle(foo)
-
-  wins = 0
-  queued = 0
-  print('Queueing')
-  for fen in foo:
-    multi = cache.get(fen, None)
-    if multi and multi[-1]['depth'] >= FLAGS.depth:
-      wins += 1
-      continue
-    queued += 1
-    request_queue.put(fen)
-
-  print(f'Queued, wins={wins}, queued={queued}')
+  queued = queue_fens(fens, request_queue, cache)
 
   longest = 0.0
   last = time.time()
   flushes = 0
   for _ in (pbar := tqdm.tqdm(range(queued))):
     pbar.set_postfix({'longest': longest, 'flushes': flushes})
-    res = response_queue.get()
-    cache[fen] = res
+    worker_response = response_queue.get()
+    fen = worker_response['fen']
+    deep_res = worker_response['deep_res']
+    cache[fen] = deep_res
 
-    if res[-1]['time'] > longest:
-      longest = res[-1]['time']
+    if deep_res[-1]['time'] > longest:
+      longest = deep_res[-1]['time']
     if time.time() > (last + 60.0):
       last = time.time()
       cache.commit()
       flushes += 1
+
   cache.commit()
 
   print('Writing Nones')
